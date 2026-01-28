@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
+import * as BufferGeometryUtils from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import GUI from "lil-gui";
 import "./style.css";
 
@@ -10,6 +11,9 @@ const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setClearColor(0x0f1418, 1);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.1;
 app.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
@@ -28,20 +32,38 @@ controls.enableDamping = true;
 const ambient = new THREE.AmbientLight(0xffffff, 0.55);
 scene.add(ambient);
 
-const keyLight = new THREE.DirectionalLight(0xffffff, 1.1);
+const hemiLight = new THREE.HemisphereLight(0x9ec5ff, 0x202026, 0.9);
+scene.add(hemiLight);
+
+const keyLight = new THREE.DirectionalLight(0xffffff, 1.3);
 keyLight.position.set(10, 16, 8);
 scene.add(keyLight);
 
+const fillLight = new THREE.DirectionalLight(0xffe7c4, 0.6);
+fillLight.position.set(-12, 6, 4);
+scene.add(fillLight);
+
+const rimLight = new THREE.DirectionalLight(0xffffff, 0.7);
+rimLight.position.set(0, 8, -12);
+scene.add(rimLight);
+
 const params = {
+  backgroundColor: "#0f1418",
   floorCount: 40,
   floorHeight: 0.25,
   towerHeight: 20,
   slabSize: 4,
   slabDepth: 0.5,
   slabShape: "box",
+  segments: 32,
+  polygonSides: 6,
+  polygonIrregularity: 0.2,
+  starPoints: 5,
+  starInnerRadius: 0.25,
   roundRadius: 0.08,
   roundSegments: 4,
   cylinderSegments: 32,
+  circleSegments: 48,
   twistMin: 0,
   twistMax: 180,
   scaleMin: 1,
@@ -64,14 +86,70 @@ const slabMaterial = new THREE.MeshStandardMaterial({
   metalness: 0.1,
   roughness: 0.5,
   vertexColors: true,
+  color: 0xffffff,
 });
 
-let slabs = null;
+let towerMesh = null;
 
 function createSlabGeometry() {
   if (params.slabShape === "cylinder") {
-    const segments = Math.max(6, Math.floor(params.cylinderSegments));
+    const segments = Math.max(6, Math.floor(params.segments));
     return new THREE.CylinderGeometry(0.5, 0.5, 1, segments, 1);
+  }
+  if (params.slabShape === "circle") {
+    const segments = Math.max(8, Math.floor(params.segments));
+    return new THREE.CylinderGeometry(0.5, 0.5, 1, segments, 1);
+  }
+  if (params.slabShape === "polygon") {
+    const sides = Math.max(3, Math.floor(params.segments));
+    const irregularity = THREE.MathUtils.clamp(params.polygonIrregularity, 0, 0.6);
+    const shape = new THREE.Shape();
+    for (let i = 0; i <= sides; i += 1) {
+      const t = i / sides;
+      const angle = t * Math.PI * 2;
+      const jitter = irregularity === 0 ? 1 : 1 - irregularity + Math.random() * irregularity * 2;
+      const radius = 0.5 * jitter;
+      const x = Math.cos(angle) * radius;
+      const y = Math.sin(angle) * radius;
+      if (i === 0) {
+        shape.moveTo(x, y);
+      } else {
+        shape.lineTo(x, y);
+      }
+    }
+    const geometry = new THREE.ExtrudeGeometry(shape, {
+      depth: 1,
+      bevelEnabled: false,
+      steps: 1,
+    });
+    geometry.center();
+    return geometry;
+  }
+  if (params.slabShape === "star") {
+    const points = Math.max(3, Math.floor(params.starPoints));
+    const inner = THREE.MathUtils.clamp(params.starInnerRadius, 0.05, 0.49);
+    const shape = new THREE.Shape();
+    const total = points * 2;
+    for (let i = 0; i <= total; i += 1) {
+      const t = i / total;
+      const angle = t * Math.PI * 2;
+      const radius = i % 2 === 0 ? 0.5 : inner;
+      const x = Math.cos(angle) * radius;
+      const y = Math.sin(angle) * radius;
+      if (i === 0) {
+        shape.moveTo(x, y);
+      } else {
+        shape.lineTo(x, y);
+      }
+    }
+    const geometry = new THREE.ExtrudeGeometry(shape, {
+      depth: 1,
+      bevelEnabled: false,
+      steps: 1,
+    });
+    geometry.rotateX(Math.PI / 2);
+    geometry.center();
+    return geometry;
   }
   if (params.slabShape === "rounded") {
     const radius = Math.min(0.45, Math.max(0, params.roundRadius));
@@ -87,24 +165,6 @@ function updateSlabGeometry() {
     slabGeometry.dispose();
   }
   slabGeometry = newGeometry;
-  if (slabs) {
-    slabs.geometry = slabGeometry;
-  }
-}
-
-function ensureSlabs(count) {
-  if (!slabGeometry) {
-    updateSlabGeometry();
-  }
-  if (slabs && slabs.count === count) return;
-  if (slabs) {
-    slabs.material.dispose();
-    scene.remove(slabs);
-  }
-  slabs = new THREE.InstancedMesh(slabGeometry, slabMaterial, count);
-  slabs.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-  slabs.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(count * 3), 3);
-  scene.add(slabs);
 }
 
 const tempObj = new THREE.Object3D();
@@ -114,7 +174,6 @@ const colorTop = new THREE.Color();
 function rebuildTower() {
   const count = Math.max(1, Math.floor(params.floorCount));
   updateSlabGeometry();
-  ensureSlabs(count);
 
   const height = Math.max(1, params.towerHeight);
   const spacing = height / count;
@@ -124,6 +183,8 @@ function rebuildTower() {
 
   colorBottom.set(params.bottomColor);
   colorTop.set(params.topColor);
+
+  const geometries = [];
 
   for (let i = 0; i < count; i += 1) {
     const t = count === 1 ? 0 : i / (count - 1);
@@ -138,28 +199,65 @@ function rebuildTower() {
     tempObj.rotation.set(0, twist, 0);
     tempObj.scale.set(params.slabSize * scale, params.floorHeight, params.slabDepth * scale);
     tempObj.updateMatrix();
-    slabs.setMatrixAt(i, tempObj.matrix);
 
-    const color = colorBottom.clone().lerp(colorTop, t);
-    slabs.setColorAt(i, color);
+    const slab = slabGeometry.clone();
+    slab.applyMatrix4(tempObj.matrix);
+
+    const position = slab.attributes.position;
+    const colors = new Float32Array(position.count * 3);
+    for (let v = 0; v < position.count; v += 1) {
+      const y = position.getY(v);
+      const ty = THREE.MathUtils.clamp((y - slabY) / height, 0, 1);
+      const color = colorBottom.clone().lerp(colorTop, ty);
+      colors[v * 3] = color.r;
+      colors[v * 3 + 1] = color.g;
+      colors[v * 3 + 2] = color.b;
+    }
+    slab.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+    geometries.push(slab);
   }
 
-  slabs.instanceMatrix.needsUpdate = true;
-  slabs.instanceColor.needsUpdate = true;
+  const merged = BufferGeometryUtils.mergeGeometries(geometries, false);
+  merged.computeVertexNormals();
+  geometries.forEach((geom) => geom.dispose());
+
+  if (!towerMesh) {
+    towerMesh = new THREE.Mesh(merged, slabMaterial);
+    scene.add(towerMesh);
+  } else {
+    towerMesh.geometry.dispose();
+    towerMesh.geometry = merged;
+  }
 }
 
 rebuildTower();
 
 const gui = new GUI({ width: 280, title: "Twisted Tower" });
+gui.addColor(params, "backgroundColor")
+  .name("Background")
+  .onChange((value) => {
+    renderer.setClearColor(value, 1);
+    scene.background = new THREE.Color(value);
+  });
 gui.add(params, "floorCount", 1, 120, 1).name("Floors").onChange(rebuildTower);
 gui.add(params, "towerHeight", 5, 80, 0.5).name("Total Height").onChange(rebuildTower);
 gui.add(params, "floorHeight", 0.1, 1, 0.05).name("Slab Height").onChange(rebuildTower);
 gui.add(params, "slabSize", 1, 8, 0.1).name("Slab Width").onChange(rebuildTower);
 gui.add(params, "slabDepth", 0.2, 6, 0.1).name("Slab Depth").onChange(rebuildTower);
-gui.add(params, "slabShape", ["box", "rounded", "cylinder"]).name("Slab Shape").onChange(rebuildTower);
+gui.add(params, "slabShape", ["box", "rounded", "circle", "cylinder", "polygon", "star"])
+  .name("Slab Shape")
+  .onChange(rebuildTower);
+gui.add(params, "segments", 3, 96, 1).name("Segments").onChange(rebuildTower);
+gui.add(params, "polygonSides", 3, 12, 1).name("Polygon Sides").onChange(rebuildTower);
+gui.add(params, "polygonIrregularity", 0, 0.6, 0.01)
+  .name("Irregularity")
+  .onChange(rebuildTower);
+gui.add(params, "starPoints", 3, 12, 1).name("Star Points").onChange(rebuildTower);
+gui.add(params, "starInnerRadius", 0.05, 0.49, 0.01).name("Star Inner").onChange(rebuildTower);
 gui.add(params, "roundRadius", 0, 0.45, 0.01).name("Round Radius").onChange(rebuildTower);
 gui.add(params, "roundSegments", 1, 12, 1).name("Round Segs").onChange(rebuildTower);
 gui.add(params, "cylinderSegments", 6, 64, 1).name("Cylinder Segs").onChange(rebuildTower);
+gui.add(params, "circleSegments", 8, 96, 1).name("Circle Segs").onChange(rebuildTower);
 
 const twistFolder = gui.addFolder("Twist Gradient");
 twistFolder.add(params, "twistMin", -720, 720, 1).name("Min (deg)").onChange(rebuildTower);
