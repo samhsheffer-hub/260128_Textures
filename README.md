@@ -1,27 +1,19 @@
-# 260128_Twisted_Tower
+# 260128_Twisted-Tower_02
 
-A parametric tower generator that stacks floor slabs in 3D, with live controls for twist, scale, height, and color gradients. The scene runs locally in the browser using three.js and a lightweight GUI for rapid iteration.
+Parametric twisted tower generator that stacks floor slabs with adjustable twist, scale, height, and gradient color controls for rapid massing exploration in the browser.
 
 ## Features
-- Stacked slab tower with adjustable floor count and floor height
-- Min/max gradient controls for twist and scale across floors
-- Base/top size controls for tapering
-- Bottom-to-top color gradient
-- Live updates via on-change UI sliders
+- Stacked floor-slab tower built from instanced geometry for performance.
+- Parametric controls for floor count, total height, slab size, and slab thickness.
+- Twist and scale gradients with min/max ranges and curve types.
+- Bottom-to-top color gradient controls.
 
 ## Getting Started
-1. Install Node.js (includes npm).
-2. Install dependencies:
-   ```bash
-   npm install
-   ```
-3. Start the dev server:
-   ```bash
-   npm run dev
-   ```
-4. Open the local URL shown in the terminal.
+1. Install dependencies: `npm install`
+2. Start the dev server: `npm run dev`
+3. Open the local URL shown in the terminal.
 
 ## Controls
-- Structure: floors, floorHeight, baseSize, topSize
-- Twist/Scale: twistMin, twistMax, scaleMin, scaleMax
-- Color: colorBottom, colorTop
+- **Orbit:** left-drag
+- **Zoom:** scroll
+- **Sliders:** adjust tower parameters, twist/scale gradients, and colors

@@ -1,96 +1,162 @@
-import "./style.css";
 import * as THREE from "three";
-import { GUI } from "lil-gui";
-import chroma from "chroma-js";
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import GUI from "lil-gui";
+import "./style.css";
 
-const app = document.getElementById("app");
-
-const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x101014);
-
-const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
-camera.position.set(8, 10, 14);
+const app = document.querySelector("#app");
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setClearColor(0x0f1418, 1);
 app.appendChild(renderer.domElement);
 
-const ambient = new THREE.AmbientLight(0xffffff, 0.6);
+const scene = new THREE.Scene();
+
+const camera = new THREE.PerspectiveCamera(
+  45,
+  window.innerWidth / window.innerHeight,
+  0.1,
+  200
+);
+camera.position.set(10, 10, 14);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+
+const ambient = new THREE.AmbientLight(0xffffff, 0.55);
 scene.add(ambient);
-const dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
-dirLight.position.set(10, 20, 10);
-scene.add(dirLight);
+
+const keyLight = new THREE.DirectionalLight(0xffffff, 1.1);
+keyLight.position.set(10, 16, 8);
+scene.add(keyLight);
 
 const params = {
-  floors: 30,
-  floorHeight: 0.3,
-  baseSize: 3,
-  topSize: 1.2,
+  floorCount: 40,
+  floorHeight: 0.25,
+  towerHeight: 20,
+  slabSize: 4,
+  slabDepth: 0.5,
   twistMin: 0,
-  twistMax: Math.PI * 2,
+  twistMax: 180,
   scaleMin: 1,
-  scaleMax: 0.6,
-  colorBottom: "#3b82f6",
-  colorTop: "#f97316"
+  scaleMax: 0.5,
+  twistCurve: "linear",
+  scaleCurve: "easeInOut",
+  bottomColor: "#f2a365",
+  topColor: "#4dd0e1",
 };
 
-let towerGroup = new THREE.Group();
-scene.add(towerGroup);
+const curveFns = {
+  linear: (t) => t,
+  easeIn: (t) => t * t,
+  easeOut: (t) => 1 - (1 - t) * (1 - t),
+  easeInOut: (t) => (t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2),
+};
 
-function buildTower() {
-  scene.remove(towerGroup);
-  towerGroup.traverse((o) => {
-    if (o.geometry) o.geometry.dispose();
-    if (o.material) o.material.dispose();
-  });
-  towerGroup = new THREE.Group();
+const slabGeometry = new THREE.BoxGeometry(1, 1, 1);
+const slabMaterial = new THREE.MeshStandardMaterial({
+  metalness: 0.1,
+  roughness: 0.5,
+  vertexColors: true,
+});
 
-  const height = params.floors * params.floorHeight;
-  const colorScale = chroma.scale([params.colorBottom, params.colorTop]).mode("lab");
+let slabs = null;
 
-  for (let i = 0; i < params.floors; i++) {
-    const t = params.floors <= 1 ? 0 : i / (params.floors - 1);
-    const twist = THREE.MathUtils.lerp(params.twistMin, params.twistMax, t);
-    const scale = THREE.MathUtils.lerp(params.scaleMin, params.scaleMax, t);
-    const size = THREE.MathUtils.lerp(params.baseSize, params.topSize, t) * scale;
-
-    const geom = new THREE.BoxGeometry(size, params.floorHeight, size);
-    const mat = new THREE.MeshStandardMaterial({ color: colorScale(t).hex() });
-    const slab = new THREE.Mesh(geom, mat);
-    slab.position.y = i * params.floorHeight - height / 2 + params.floorHeight / 2;
-    slab.rotation.y = twist;
-    towerGroup.add(slab);
+function ensureSlabs(count) {
+  if (slabs && slabs.count === count) return;
+  if (slabs) {
+    slabs.geometry.dispose();
+    slabs.material.dispose();
+    scene.remove(slabs);
   }
-
-  scene.add(towerGroup);
+  slabs = new THREE.InstancedMesh(slabGeometry, slabMaterial, count);
+  slabs.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  slabs.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(count * 3), 3);
+  scene.add(slabs);
 }
 
-const gui = new GUI();
-const f1 = gui.addFolder("Structure");
-f1.add(params, "floors", 1, 200, 1).onChange(buildTower);
-f1.add(params, "floorHeight", 0.05, 1, 0.01).onChange(buildTower);
-f1.add(params, "baseSize", 0.5, 10, 0.1).onChange(buildTower);
-f1.add(params, "topSize", 0.2, 10, 0.1).onChange(buildTower);
-const f2 = gui.addFolder("Twist/Scale");
-f2.add(params, "twistMin", -Math.PI * 4, Math.PI * 4, 0.01).onChange(buildTower);
-f2.add(params, "twistMax", -Math.PI * 4, Math.PI * 4, 0.01).onChange(buildTower);
-f2.add(params, "scaleMin", 0.1, 2, 0.01).onChange(buildTower);
-f2.add(params, "scaleMax", 0.1, 2, 0.01).onChange(buildTower);
-const f3 = gui.addFolder("Color");
-f3.addColor(params, "colorBottom").onChange(buildTower);
-f3.addColor(params, "colorTop").onChange(buildTower);
+const tempObj = new THREE.Object3D();
+const colorBottom = new THREE.Color();
+const colorTop = new THREE.Color();
 
-buildTower();
+function rebuildTower() {
+  const count = Math.max(1, Math.floor(params.floorCount));
+  ensureSlabs(count);
+
+  const height = Math.max(1, params.towerHeight);
+  const spacing = height / count;
+  const slabY = -height / 2;
+  const twistCurveFn = curveFns[params.twistCurve] || curveFns.linear;
+  const scaleCurveFn = curveFns[params.scaleCurve] || curveFns.linear;
+
+  colorBottom.set(params.bottomColor);
+  colorTop.set(params.topColor);
+
+  for (let i = 0; i < count; i += 1) {
+    const t = count === 1 ? 0 : i / (count - 1);
+    const twistT = twistCurveFn(t);
+    const scaleT = scaleCurveFn(t);
+    const twist = THREE.MathUtils.degToRad(
+      THREE.MathUtils.lerp(params.twistMin, params.twistMax, twistT)
+    );
+    const scale = THREE.MathUtils.lerp(params.scaleMin, params.scaleMax, scaleT);
+
+    tempObj.position.set(0, slabY + i * spacing, 0);
+    tempObj.rotation.set(0, twist, 0);
+    tempObj.scale.set(params.slabSize * scale, params.floorHeight, params.slabDepth * scale);
+    tempObj.updateMatrix();
+    slabs.setMatrixAt(i, tempObj.matrix);
+
+    const color = colorBottom.clone().lerp(colorTop, t);
+    slabs.setColorAt(i, color);
+  }
+
+  slabs.instanceMatrix.needsUpdate = true;
+  slabs.instanceColor.needsUpdate = true;
+}
+
+rebuildTower();
+
+const gui = new GUI({ width: 280, title: "Twisted Tower" });
+gui.add(params, "floorCount", 1, 120, 1).name("Floors").onChange(rebuildTower);
+gui.add(params, "towerHeight", 5, 80, 0.5).name("Total Height").onChange(rebuildTower);
+gui.add(params, "floorHeight", 0.1, 1, 0.05).name("Slab Height").onChange(rebuildTower);
+gui.add(params, "slabSize", 1, 8, 0.1).name("Slab Width").onChange(rebuildTower);
+gui.add(params, "slabDepth", 0.2, 6, 0.1).name("Slab Depth").onChange(rebuildTower);
+
+const twistFolder = gui.addFolder("Twist Gradient");
+twistFolder.add(params, "twistMin", -720, 720, 1).name("Min (deg)").onChange(rebuildTower);
+twistFolder.add(params, "twistMax", -720, 720, 1).name("Max (deg)").onChange(rebuildTower);
+twistFolder.add(params, "twistCurve", Object.keys(curveFns)).name("Curve").onChange(rebuildTower);
+
+const scaleFolder = gui.addFolder("Scale Gradient");
+scaleFolder.add(params, "scaleMin", 0.2, 2, 0.01).name("Min").onChange(rebuildTower);
+scaleFolder.add(params, "scaleMax", 0.2, 2, 0.01).name("Max").onChange(rebuildTower);
+scaleFolder.add(params, "scaleCurve", Object.keys(curveFns)).name("Curve").onChange(rebuildTower);
+
+const colorFolder = gui.addFolder("Color Gradient");
+colorFolder.addColor(params, "bottomColor").name("Bottom").onChange(rebuildTower);
+colorFolder.addColor(params, "topColor").name("Top").onChange(rebuildTower);
+
+const uiPanel = document.createElement("div");
+uiPanel.className = "ui-panel";
+uiPanel.innerHTML = "<strong>Tip:</strong> drag to orbit, scroll to zoom.";
+app.appendChild(uiPanel);
+
+function onResize() {
+  const { innerWidth, innerHeight } = window;
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+}
+
+window.addEventListener("resize", onResize);
 
 function animate() {
   requestAnimationFrame(animate);
+  controls.update();
   renderer.render(scene, camera);
 }
-animate();
 
-window.addEventListener("resize", () => {
-  camera.aspect = window.innerWidth / window.innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
-});
+animate();
